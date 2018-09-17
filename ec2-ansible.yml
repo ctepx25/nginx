@@ -52,7 +52,7 @@
     ec2_remote_facts:
       aws_access_key: "{{access}}"
       aws_secret_key: "{{secret}}"
-      region: {{region}}
+      region: "{{region}}"
       filters:
         "tag:Name": "{{tag_name}}"
     register: ec2_remote_facts
