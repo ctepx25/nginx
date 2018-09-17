@@ -1,0 +1,133 @@
+# Basic provisioning example
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    access: ""
+    secret: ""
+    subnet_id: "subnet-4af67746"
+    ami: "ami-04169656fea786776"
+    region: "us-east-1"
+    key: "us-east-1"
+    key_path: "/home/ctepx/ssh-keys/us-east-1.pem"
+    sg_group: "sg-5ce19a3a"
+    tag_name: "nginx"
+    sqs_name: "sqs-nginx"
+    lambda_name: "lambda_nginx"
+    lambda_role: "lambda-role"
+  tasks:
+
+  - name: Get git repository
+    git:
+      repo=https://github.com/ctepx25/lambda.git
+      dest=/tmp/lambda
+
+  - name: Start instance
+    ec2:
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      key_name: "{{key}}"
+      instance_type: t2.micro
+      image: "{{ami}}"
+      wait: yes
+      group_id: "{{sg_group}}"
+      count: 1
+      vpc_subnet_id: "{{subnet_id}}"
+      assign_public_ip: yes
+      instance_tags:
+        Name: "{{tag_name}}"
+
+  - pause:
+      minutes: 3
+
+  - name: get ip
+    ec2_remote_facts:
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: us-east-1
+      filters:
+        "tag:Name": "{{tag_name}}"
+    register: ec2_remote_facts
+  - debug: var=ec2_remote_facts['instances'][0]['public_ip_address']
+
+  - name: Install dependences
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'sudo apt-get update;sudo apt-get install docker.io docker-compose apache2 libapache2-mod-php git -y; sudo apt-get remove apparmor -y'
+    register: output
+  - debug: var=output.stdout_lines
+
+  - name: Clone Git repo
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'git clone https://github.com/ctepx25/lambda.git; sudo cp /home/ubuntu/lambda/lambda.php /var/www/html/lambda.php'
+    register: output
+  - debug: var=output.stdout_lines
+
+  - name: Add apache user to sudoers file
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} "echo www-data ALL=\(ALL\) NOPASSWD':' /usr/bin/docker-compose,/bin/sed|sudo tee  --append /etc/sudoers"
+    register: output
+  - debug: var=output.stdout_lines
+
+  - name: Create nginx service
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'cd /home/ubuntu/lambda/;sudo docker-compose -f docker-compose.yml up --build -d'
+    register: output
+  - debug: var=output.stdout_lines
+  
+  - name: SQS
+    sqs_queue:
+      name: "{{sqs_name}}"
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      default_visibility_timeout: 120
+      message_retention_period: 86400
+      maximum_message_size: 1024
+      delivery_delay: 30
+      receive_message_wait_time: 20
+
+    register: sqs_queue
+  - debug: var=sqs_queue['queue_arn']
+
+  - name: Copy /tmp/lambda/lambda_function.py to /tmp
+    copy:
+      src: /tmp/lambda/lambda_function.py
+      dest: /tmp/lambda_function.py
+
+  - replace:
+      path: /tmp/lambda_function.py
+      regexp: 'HOST'
+      replace: "{{ ec2_remote_facts['instances'][0]['public_ip_address'] }}"
+      backup: yes
+
+  - name: Ansible zip file with path example
+    archive:
+      path: /tmp/lambda_function.py
+      dest: /tmp/lambda_function.zip
+      format: zip
+
+  - name: Create Lambda function
+    lambda:
+      name: "{{lambda_name}}"
+      state: present
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      zip_file: '/tmp/lambda_function.zip'
+      runtime: 'python3.6'
+      handler: 'lambda_function.lambda_handler'
+      role: "{{lambda_role}}"
+
+  - name: Add lambda trigger
+    command: python3 lambda-trigger.py {{item}}
+    with_items:
+    - "{{sqs_queue['queue_arn']}} {{lambda_name}} {{region}} {{access}} {{secret}}"
+    register: output
+  - debug: var=output.stdout_lines
+
+  - name: Delete /tmp/lambda_function.py
+    file:
+      state: absent
+      path: '/tmp/lambda_function.py'
+
+  - name: Delete /tmp/lambda_function.zip
+    file:
+      state: absent
+      path: '/tmp/lambda_function.zip'

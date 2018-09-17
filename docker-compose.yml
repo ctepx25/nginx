@@ -1,0 +1,20 @@
+version: '2.0'
+services:
+  nginx-service:
+    container_name: nginx
+    build:
+      context: nginx/
+      args:
+        - VERSION=1
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - 8080:80
+    networks:
+      - nginx
+
+
+networks:
+  nginx:
