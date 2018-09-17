@@ -9,18 +9,23 @@
     ami: "ami-04169656fea786776"
     region: "us-east-1"
     key: "us-east-1"
-    key_path: "/home/ctepx/ssh-keys/us-east-1.pem"
+    key_path: ""
     sg_group: "sg-5ce19a3a"
     tag_name: "nginx"
     sqs_name: "sqs-nginx"
     lambda_name: "lambda_nginx"
     lambda_role: "lambda-role"
+
   tasks:
+  - name: Prompt
+    pause: prompt="Please choose one of the following - deploy|terminate"
+    register: arg1
 
   - name: Get git repository
     git:
-      repo=https://github.com/ctepx25/lambda.git
-      dest=/tmp/lambda
+      repo=https://github.com/ctepx25/nginx.git
+      dest=/tmp/nginx
+    when: arg1.user_input == "deploy"
 
   - name: Start instance
     ec2:
@@ -37,15 +42,17 @@
       assign_public_ip: yes
       instance_tags:
         Name: "{{tag_name}}"
+    when: arg1.user_input == "deploy"
 
   - pause:
-      minutes: 3
+      minutes: 1
+    when: arg1.user_input == "deploy"
 
   - name: get ip
     ec2_remote_facts:
       aws_access_key: "{{access}}"
       aws_secret_key: "{{secret}}"
-      region: us-east-1
+      region: {{region}}
       filters:
         "tag:Name": "{{tag_name}}"
     register: ec2_remote_facts
@@ -54,21 +61,25 @@
   - name: Install dependences
     shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'sudo apt-get update;sudo apt-get install docker.io docker-compose apache2 libapache2-mod-php git -y; sudo apt-get remove apparmor -y'
     register: output
+    when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
 
   - name: Clone Git repo
-    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'git clone https://github.com/ctepx25/lambda.git; sudo cp /home/ubuntu/lambda/lambda.php /var/www/html/lambda.php'
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'git clone https://github.com/ctepx25/nginx.git; sudo cp /home/ubuntu/nginx/lambda.php /var/www/html/lambda.php'
     register: output
+    when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
 
   - name: Add apache user to sudoers file
     shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} "echo www-data ALL=\(ALL\) NOPASSWD':' /usr/bin/docker-compose,/bin/sed|sudo tee  --append /etc/sudoers"
     register: output
+    when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
 
   - name: Create nginx service
-    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'cd /home/ubuntu/lambda/;sudo docker-compose -f docker-compose.yml up --build -d'
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'cd /home/ubuntu/nginx/;sudo docker-compose -f docker-compose.yml up --build -d'
     register: output
+    when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
   
   - name: SQS
@@ -82,26 +93,29 @@
       maximum_message_size: 1024
       delivery_delay: 30
       receive_message_wait_time: 20
-
     register: sqs_queue
+    when: arg1.user_input == "deploy"
   - debug: var=sqs_queue['queue_arn']
 
-  - name: Copy /tmp/lambda/lambda_function.py to /tmp
+  - name: Copy /tmp/nginx/lambda_function.py to /tmp
     copy:
-      src: /tmp/lambda/lambda_function.py
+      src: /tmp/nginx/lambda_function.py
       dest: /tmp/lambda_function.py
+    when: arg1.user_input == "deploy"
 
   - replace:
       path: /tmp/lambda_function.py
       regexp: 'HOST'
       replace: "{{ ec2_remote_facts['instances'][0]['public_ip_address'] }}"
       backup: yes
+    when: arg1.user_input == "deploy"
 
   - name: Ansible zip file with path example
     archive:
       path: /tmp/lambda_function.py
       dest: /tmp/lambda_function.zip
       format: zip
+    when: arg1.user_input == "deploy"
 
   - name: Create Lambda function
     lambda:
@@ -114,20 +128,57 @@
       runtime: 'python3.6'
       handler: 'lambda_function.lambda_handler'
       role: "{{lambda_role}}"
+    when: arg1.user_input == "deploy"
 
   - name: Add lambda trigger
     command: python3 lambda-trigger.py {{item}}
     with_items:
     - "{{sqs_queue['queue_arn']}} {{lambda_name}} {{region}} {{access}} {{secret}}"
     register: output
+    when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
 
   - name: Delete /tmp/lambda_function.py
     file:
       state: absent
       path: '/tmp/lambda_function.py'
+    when: arg1.user_input == "deploy"
 
   - name: Delete /tmp/lambda_function.zip
     file:
       state: absent
       path: '/tmp/lambda_function.zip'
+    when: arg1.user_input == "deploy"
+
+  - name: Delete git folder
+    file:
+      state: absent
+      path: '/tmp/nginx'
+    when: arg1.user_input == "deploy"
+
+  - name: Terminate instances
+    ec2:
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      state: 'absent'
+      instance_ids: "{{ec2_remote_facts['instances'][0]['id']}}"
+    when: arg1.user_input == "terminate"
+
+  - name: Delete Lambda function
+    lambda:
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      name: "{{lambda_name}}"
+      state: absent
+    when: arg1.user_input == "terminate"
+
+  - name: Delete sqs
+    sqs_queue:
+      aws_access_key: "{{access}}"
+      aws_secret_key: "{{secret}}"
+      region: "{{region}}"
+      name: "{{sqs_name}}"
+      state: absent
+    when: arg1.user_input == "terminate"
