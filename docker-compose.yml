@@ -11,7 +11,7 @@ services:
         soft: -1
         hard: -1
     ports:
-      - 8080:80
+      - 80:80
     networks:
       - nginx
 
