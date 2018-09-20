@@ -3,7 +3,7 @@ services:
   nginx-service:
     container_name: nginx
     build:
-      context: nginx/
+      context: /home/ubuntu/nginx/nginx/
       args:
         - VERSION=1
     ulimits:
