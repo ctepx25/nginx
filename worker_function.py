@@ -12,7 +12,7 @@ def worker_handler(event, context):
     host = event['Records'][0]['body'].split(',')[0]
     action = event['Records'][0]['body'].split(',')[1]
     print "Connecting to " + host
-    c.connect( hostname = host, username = "root", pkey = k )
+    c.connect( hostname = host, username = "ubuntu", pkey = k )
     print "Connected to " + host
 
     command = 'echo '+action+' >> /tmp/log.txt'
