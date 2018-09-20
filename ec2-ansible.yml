@@ -5,16 +5,16 @@
   vars:
     access: ""
     secret: ""
-    subnet_id: "subnet-4af67746"
-    ami: "ami-04169656fea786776"
-    region: "us-east-1"
-    key: "us-east-1"
+    subnet_id: ""
+    ami: ""
+    region: ""
+    key: ""
     key_path: ""
-    sg_group: "sg-5ce19a3a"
+    sg_group: ""
     tag_name: "nginx"
     sqs_name: "sqs-nginx"
-    lambda_name: "lambda_nginx"
-    lambda_role: "lambda-role"
+    lambda_name: "lambda-nginx"
+    lambda_role: ""
 
   tasks:
   - name: Prompt
@@ -59,19 +59,19 @@
   - debug: var=ec2_remote_facts['instances'][0]['public_ip_address']
 
   - name: Install dependences
-    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'sudo apt-get update;sudo apt-get install docker.io docker-compose apache2 libapache2-mod-php git -y; sudo apt-get remove apparmor -y'
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'sudo apt-get update;sudo apt-get install docker.io docker-compose git -y; sudo apt-get remove apparmor -y'
+    register: output
+    when: arg1.user_input == "deploy"
+  - debug: var=output.stdout_lines
+
+  - name: Add ssh public key
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'sudo cat /home/ubuntu/nginx/id_rsa.pub >> /root/.ssh/authorized_keys'
     register: output
     when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
 
   - name: Clone Git repo
-    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'git clone https://github.com/ctepx25/nginx.git; sudo cp /home/ubuntu/nginx/lambda.php /var/www/html/lambda.php'
-    register: output
-    when: arg1.user_input == "deploy"
-  - debug: var=output.stdout_lines
-
-  - name: Add apache user to sudoers file
-    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} "echo www-data ALL=\(ALL\) NOPASSWD':' /usr/bin/docker-compose,/bin/sed|sudo tee  --append /etc/sudoers"
+    shell: ssh -i "{{key_path}}" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ubuntu@{{ ec2_remote_facts['instances'][0]['public_ip_address'] }} 'git clone https://github.com/ctepx25/nginx.git'
     register: output
     when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
@@ -97,26 +97,6 @@
     when: arg1.user_input == "deploy"
   - debug: var=sqs_queue['queue_arn']
 
-  - name: Copy /tmp/nginx/lambda_function.py to /tmp
-    copy:
-      src: /tmp/nginx/lambda_function.py
-      dest: /tmp/lambda_function.py
-    when: arg1.user_input == "deploy"
-
-  - replace:
-      path: /tmp/lambda_function.py
-      regexp: 'HOST'
-      replace: "{{ ec2_remote_facts['instances'][0]['public_ip_address'] }}"
-      backup: yes
-    when: arg1.user_input == "deploy"
-
-  - name: Ansible zip file with path example
-    archive:
-      path: /tmp/lambda_function.py
-      dest: /tmp/lambda_function.zip
-      format: zip
-    when: arg1.user_input == "deploy"
-
   - name: Create Lambda function
     lambda:
       name: "{{lambda_name}}"
@@ -124,9 +104,9 @@
       aws_access_key: "{{access}}"
       aws_secret_key: "{{secret}}"
       region: "{{region}}"
-      zip_file: '/tmp/lambda_function.zip'
-      runtime: 'python3.6'
-      handler: 'lambda_function.lambda_handler'
+      zip_file: '/tmp/nginx/worker_function.zip'
+      runtime: 'python2.7'
+      handler: 'worker_function.worker_handler'
       role: "{{lambda_role}}"
     when: arg1.user_input == "deploy"
 
@@ -137,18 +117,6 @@
     register: output
     when: arg1.user_input == "deploy"
   - debug: var=output.stdout_lines
-
-  - name: Delete /tmp/lambda_function.py
-    file:
-      state: absent
-      path: '/tmp/lambda_function.py'
-    when: arg1.user_input == "deploy"
-
-  - name: Delete /tmp/lambda_function.zip
-    file:
-      state: absent
-      path: '/tmp/lambda_function.zip'
-    when: arg1.user_input == "deploy"
 
   - name: Delete git folder
     file:
