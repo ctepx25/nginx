@@ -2,10 +2,7 @@ version: '2.0'
 services:
   nginx-service:
     container_name: nginx
-    build:
-      context: /home/ubuntu/nginx/nginx/
-      args:
-        - VERSION=1
+    image: nginx:${BUILD_NUM}
     ulimits:
       memlock:
         soft: -1
